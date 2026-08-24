@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap3 rescap desktop"
+         xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest">
+  <Identity Name="CopilotRemap.App"
+            Publisher="CN=CopilotRemapDev"
+            Version="1.0.0.0"
+            ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Copilot Remap</DisplayName>
+    <PublisherDisplayName>Copilot Remap Developer</PublisherDisplayName>
+    <Description>Ultra-fast Copilot Key Remapper for Windows 11 written in Rust</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22621.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+  <Applications>
+    <Application Id="CopilotRemap" Executable="CopilotRemap.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Copilot Remap"
+                          Description="Runs configured action when Copilot key is pressed."
+                          BackgroundColor="#0F172A"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Square71x71Logo="Assets\Square71x71Logo.png"
+                         Square310x310Logo="Assets\Square310x310Logo.png"
+                         Wide310x150Logo="Assets\Wide310x150Logo.png"
+                         ShortName="Copilot Remap" />
+      </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.protocol">
+          <uap:Protocol Name="copilotremap-key">
+            <uap:DisplayName>Copilot Remap key activation</uap:DisplayName>
+          </uap:Protocol>
+        </uap:Extension>
+        <uap3:Extension Category="windows.appExtension">
+          <uap3:AppExtension Name="com.microsoft.windows.copilotkeyprovider"
+                             Id="CopilotRemap"
+                             DisplayName="Copilot Remap (Rust)"
+                             Description="Custom Copilot Key Remapper written in Rust"
+                             PublicFolder="Public">
+            <uap3:Properties>
+              <SingleTap>copilotremap-key://?state=Tap</SingleTap>
+              <PressAndHoldStart>copilotremap-key://?state=Down</PressAndHoldStart>
+              <PressAndHoldStop>copilotremap-key://?state=Up</PressAndHoldStop>
+            </uap3:Properties>
+          </uap3:AppExtension>
+        </uap3:Extension>
+      </Extensions>
+    </Application>
+    <Application Id="Settings" Executable="Settings.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements DisplayName="Copilot Remap Settings"
+                          Description="Configure what the Windows 11 Copilot key does."
+                          BackgroundColor="#0F172A"
+                          Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Square71x71Logo="Assets\Square71x71Logo.png"
+                         Square310x310Logo="Assets\Square310x310Logo.png"
+                         Wide310x150Logo="Assets\Wide310x150Logo.png"
+                         ShortName="Copilot Remap Settings" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
