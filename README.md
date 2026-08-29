@@ -1,78 +1,78 @@
 # Copilot Remap (Rust) 🚀
 
-**Copilot Remap** là ứng dụng native Windows 11 siêu nhẹ được viết 100% bằng **Rust**, cho phép bạn gán lại (remap) phím cứng **Copilot** hoặc tổ hợp phím `Windows + C` để mở bất kỳ ứng dụng, website, phím tắt hoặc script nào bạn muốn.
+**Copilot Remap** is an ultra-lightweight native Windows 11 application written 100% in **Rust** that allows you to remap the hardware **Copilot key** or the `Windows + C` shortcut to launch any application, website, shortcut, or script you want.
 
-Ứng dụng đăng ký làm **Copilot Key Provider** chính quy với Windows 11 thông qua App Extension `com.microsoft.windows.copilotkeyprovider` (đóng gói MSIX tự ký), giúp xuất hiện trực tiếp trong Windows Settings mà không cần chạy ngầm tốn RAM hay quét phím liên tục.
-
----
-
-## ⚡ Tính năng nổi bật
-
-- 🦀 **100% Native Rust**: Kích thước binary chỉ **~343 KB**, toàn bộ gói MSIX chỉ **~209 KB**.
-- ⚡ **Tốc độ tức thì**: Phản hồi kích hoạt phím dưới **5ms**, không trễ khởi động của runtime .NET/Electron.
-- 🍃 **Không tốn RAM nền**: Khi bấm phím Copilot, Windows kích hoạt app chạy hành động rồi tự đóng ngay, **0% RAM tiêu thụ nền**.
-- 🛠️ **Đa dạng hành động**:
-  - 🚀 **Khởi chạy ứng dụng (.exe / .lnk / .bat)** kèm tham số và thư mục làm việc.
-  - 🌐 **Mở Website / AI Assistants**: ChatGPT, Claude AI, Google Gemini, Perplexity, v.v.
-  - ⌨️ **Gửi phím tắt (SendInput)**: PowerToys Run (`Alt + Space`), Snipping Tool (`Win + Shift + S`), Task Manager (`Ctrl + Shift + Esc`), v.v.
-  - 📟 **Chạy lệnh Shell**: PowerShell / Command Prompt tùy chỉnh.
-- 🎨 **Settings GUI trực quan**: Giao diện Win32 hiện đại, hỗ trợ preset 1-click, hộp thoại chọn file `.exe`, nút **"Test Action"** và liên kết trực tiếp tới Windows Settings.
-- 📦 **Cài đặt 1-click**: Script `install.ps1` tự động trust chứng chỉ, cài MSIX và kích hoạt phím Copilot trong Registry.
+The app registers as an official **Copilot Key Provider** with Windows 11 via the `com.microsoft.windows.copilotkeyprovider` App Extension (self-signed MSIX package), making it appear directly in Windows Settings without requiring background processes that consume RAM or continuous key polling.
 
 ---
 
-## 📥 Cài đặt 1-Click
+## ⚡ Highlights & Features
 
-1. Mở PowerShell với quyền Administrator (hoặc chạy bình thường, script sẽ tự xin quyền):
+- 🦀 **100% Native Rust**: Binary size is only **~343 KB**, and the entire MSIX package is only **~209 KB**.
+- ⚡ **Instant Response**: Key trigger response latency under **5ms**, with no .NET/Electron runtime startup delays.
+- 🍃 **Zero Background RAM**: When the Copilot key is pressed, Windows triggers the app, executes the action, and exits immediately — **0% background RAM usage**.
+- 🛠️ **Versatile Actions**:
+  - 🚀 **Launch Application (.exe / .lnk / .bat)** with custom arguments and working directory.
+  - 🌐 **Open Websites / AI Assistants**: ChatGPT, Claude AI, Google Gemini, Perplexity, etc.
+  - ⌨️ **Send Shortcut Keys (SendInput)**: PowerToys Run (`Alt + Space`), Snipping Tool (`Win + Shift + S`), Task Manager (`Ctrl + Shift + Esc`), etc.
+  - 📜 **Execute Shell Commands**: Custom PowerShell / Command Prompt commands.
+- 🎨 **Intuitive Settings GUI**: Modern Win32 interface with 1-click presets, `.exe` file picker, **"Test Action"** button, and direct link to Windows Settings.
+- 📦 **1-Click Installation**: The `install.ps1` script automatically trusts the certificate, installs the MSIX package, and activates the Copilot key in the Registry.
+
+---
+
+## 📥 1-Click Installation
+
+1. Open PowerShell as Administrator (or run normally; the script will request elevation):
    ```powershell
    .\install.ps1
    ```
-2. Script sẽ:
-   - Tự động thêm chứng chỉ số vào kho `TrustedPeople`
-   - Cài đặt gói `CopilotRemap.msix`
-   - Tự động kích hoạt CopilotRemap làm ứng dụng xử lý phím Copilot trong Windows
-   - Mở cửa sổ Cài đặt để bạn chọn hành động mong muốn.
+2. The script will:
+   - Automatically install the digital certificate into the `TrustedPeople` store
+   - Install the `CopilotRemap.msix` package
+   - Automatically configure CopilotRemap as the Copilot key handler in Windows
+   - Open the Settings window for you to choose your desired action.
 
 ---
 
-## ⚙️ Sử dụng & Cấu hình
+## ⚙️ Usage & Configuration
 
-Bạn có thể mở giao diện Cài đặt bất cứ lúc nào bằng cách:
-- Chạy `CopilotRemap.exe` từ Start Menu hoặc thư mục dự án
-- Hoặc chạy `.\target\release\CopilotRemap.exe`
+You can open the Settings interface at any time by:
+- Launching `CopilotRemap.exe` from the Start Menu or project directory
+- Or running `.\target\release\CopilotRemap.exe`
 
-### Preset có sẵn:
-- 🤖 **ChatGPT (Web)**: Mở `https://chatgpt.com`
-- 🧠 **Claude AI (Web)**: Mở `https://claude.ai`
-- 🌐 **Google Gemini (Web)**: Mở `https://gemini.google.com`
-- ⚡ **PowerToys Run**: Gửi phím `Alt + Space`
-- 💻 **Windows Terminal**: Chạy `wt.exe`
-- 📸 **Snipping Tool**: Gửi phím `Win + Shift + S`
-- ⚙️ **Task Manager**: Mở `Taskmgr.exe`
-- 📝 **Notepad**: Mở `notepad.exe`
-- 🛠️ **Custom Application**: Chọn bất kỳ phần mềm nào trên máy.
+### Built-in Presets:
+- 🤖 **ChatGPT (Web)**: Opens `https://chatgpt.com`
+- 🧠 **Claude AI (Web)**: Opens `https://claude.ai`
+- 🌐 **Google Gemini (Web)**: Opens `https://gemini.google.com`
+- ⚡ **PowerToys Run**: Sends `Alt + Space`
+- 💻 **Windows Terminal**: Launches `wt.exe`
+- 📸 **Snipping Tool**: Sends `Win + Shift + S`
+- ⚙️ **Task Manager**: Opens `Taskmgr.exe`
+- 📝 **Notepad**: Opens `notepad.exe`
+- 🛠️ **Custom Application**: Select any executable on your system.
 
-File cấu hình được lưu tại: `%LOCALAPPDATA%\CopilotRemap\config.json`.
+The configuration file is stored at: `%LOCALAPPDATA%\CopilotRemap\config.json`.
 
 ---
 
-## 🔨 Hướng dẫn Build từ Source
+## 🔨 Build from Source
 
-Yêu cầu:
+Requirements:
 - Rust toolchain (`rustup` / `cargo`)
 - Visual Studio Build Tools (C++ Workload & Windows 10/11 SDK)
 
-Chạy script build:
+Run the build script:
 ```powershell
 .\build.ps1
 ```
-Kết quả gói MSIX đã ký sẽ nằm tại: `target\CopilotRemap.msix`.
+The signed MSIX package will be output to: `target\CopilotRemap.msix`.
 
 ---
 
-## 🗑️ Gỡ cài đặt
+## 🗑️ Uninstallation
 
-Chạy script:
+Run the uninstall script:
 ```powershell
 .\uninstall.ps1
 ```

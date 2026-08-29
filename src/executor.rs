@@ -1,4 +1,6 @@
-use crate::config::{ActionType, AppConfig, CustomCommandConfig, LaunchAppConfig, OpenUrlConfig, SendKeysConfig};
+use crate::config::{
+    ActionType, AppConfig, CustomCommandConfig, LaunchAppConfig, OpenUrlConfig, SendKeysConfig,
+};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use windows::core::{w, PCWSTR};
@@ -36,13 +38,23 @@ pub fn launch_app(config: &LaunchAppConfig) {
         return;
     }
 
+    let lower_path = path.to_lowercase();
+
     // Check if this is a Windows Store / UWP / AUMID app or shell:AppsFolder URI
-    if path.to_lowercase().starts_with("shell:appsfolder\\") || path.contains('!') {
-        let target = if path.to_lowercase().starts_with("shell:appsfolder\\") {
+    let is_shell_uri = lower_path.starts_with("shell:")
+        || path.contains('!')
+        || (path.starts_with('{') && path.contains('}'))
+        || path.starts_with("Microsoft.")
+        || path.starts_with("electron.app.")
+        || path.starts_with("com.");
+
+    if is_shell_uri {
+        let target = if lower_path.starts_with("shell:appsfolder\\") || lower_path.starts_with("shell:") {
             path.to_string()
         } else {
             format!(r"shell:AppsFolder\{}", path)
         };
+
         let wide_explorer = to_wide("explorer.exe");
         let wide_target = to_wide(&target);
         unsafe {

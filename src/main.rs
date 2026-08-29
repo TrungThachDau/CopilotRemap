@@ -42,11 +42,11 @@ fn main() {
     }
 
     // Check if registry setup command
-    if let Some(pos) = args.iter().position(|a| a == "--set-aumid") {
-        if let Some(aumid) = args.get(pos + 1) {
-            registry_helper::set_copilot_key_provider(aumid);
-            return;
-        }
+    if let Some(pos) = args.iter().position(|a| a == "--set-aumid")
+        && let Some(aumid) = args.get(pos + 1)
+    {
+        registry_helper::set_copilot_key_provider(aumid);
+        return;
     }
 
     // Check if user explicitly launched Settings via command line

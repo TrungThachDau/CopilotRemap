@@ -2,35 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ActionType {
     LaunchApp,
+    #[default]
     OpenUrl,
     SendKeys,
     CustomCommand,
 }
 
-impl Default for ActionType {
-    fn default() -> Self {
-        ActionType::OpenUrl
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LaunchAppConfig {
     pub path: String,
     pub arguments: String,
     pub working_dir: String,
-}
-
-impl Default for LaunchAppConfig {
-    fn default() -> Self {
-        Self {
-            path: String::new(),
-            arguments: String::new(),
-            working_dir: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,12 +103,11 @@ impl AppConfig {
 
     pub fn load() -> Self {
         let config_path = Self::get_config_path();
-        if config_path.exists() {
-            if let Ok(content) = fs::read_to_string(&config_path) {
-                if let Ok(config) = serde_json::from_str::<AppConfig>(&content) {
-                    return config;
-                }
-            }
+        if config_path.exists()
+            && let Ok(content) = fs::read_to_string(&config_path)
+            && let Ok(config) = serde_json::from_str::<AppConfig>(&content)
+        {
+            return config;
         }
         let default_config = Self::default();
         let _ = default_config.save();
@@ -133,7 +117,7 @@ impl AppConfig {
     pub fn save(&self) -> std::io::Result<()> {
         let config_path = Self::get_config_path();
         let content = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         fs::write(config_path, content)
     }
 }

@@ -8,7 +8,7 @@ pub fn handle_key_activation(args: &[String], full_cmd_line: &str) {
 
     if let Some(pos) = combined.find("state=") {
         let s = &combined[pos + 6..];
-        let s = s.split(|c: char| c == '&' || c == ' ' || c == '"' || c == '\'').next().unwrap_or(s);
+        let s = s.split(['&', ' ', '"', '\'']).next().unwrap_or(s);
         state = s.trim().to_string();
     }
 

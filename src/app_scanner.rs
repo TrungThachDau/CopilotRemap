@@ -62,7 +62,7 @@ pub fn get_installed_apps() -> Vec<InstalledApp> {
         })
         .collect();
 
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by_key(|a| a.name.to_lowercase());
     result
 }
 
@@ -72,41 +72,37 @@ fn scan_shell_apps_folder(apps: &mut BTreeMap<String, (String, bool)>) {
 
         if let Ok(apps_folder) =
             SHCreateItemFromParsingName::<PCWSTR, _, IShellItem>(w!("shell:AppsFolder"), None)
-        {
-            if let Ok(enum_items) =
+            && let Ok(enum_items) =
                 apps_folder.BindToHandler::<_, IEnumShellItems>(None, &BHID_EnumItems)
-            {
-                let mut items = [None];
-                let mut fetched = 0;
+        {
+            let mut items = [None];
+            let mut fetched = 0;
 
-                while enum_items.Next(&mut items, Some(&mut fetched)).is_ok() && fetched > 0 {
-                    if let Some(item) = &items[0] {
-                        let name = get_item_string(item, SIGDN_NORMALDISPLAY);
-                        let parsing_name = get_item_string(item, SIGDN_DESKTOPABSOLUTEPARSING);
+            while enum_items.Next(&mut items, Some(&mut fetched)).is_ok() && fetched > 0 {
+                if let Some(item) = &items[0] {
+                    let name = get_item_string(item, SIGDN_NORMALDISPLAY);
+                    let parsing_name = get_item_string(item, SIGDN_DESKTOPABSOLUTEPARSING);
 
-                        if let (Some(name), Some(parsing_name)) = (name, parsing_name) {
-                            let lower = name.to_lowercase();
-                            if !name.trim().is_empty()
-                                && !lower.contains("uninstall")
-                                && !lower.contains("gỡ cài đặt")
-                                && !lower.contains("setup")
-                                && !lower.starts_with("ms-resource:")
-                            {
-                                let is_store = parsing_name.contains('!')
-                                    || parsing_name.to_lowercase().contains("windowsapps")
-                                    || parsing_name.to_lowercase().contains("shell:appsfolder");
+                    if let (Some(name), Some(parsing_name)) = (name, parsing_name) {
+                        let lower = name.to_lowercase();
+                        if !name.trim().is_empty()
+                            && !lower.contains("uninstall")
+                            && !lower.contains("gỡ cài đặt")
+                            && !lower.contains("setup")
+                            && !lower.starts_with("ms-resource:")
+                        {
+                            let is_store = parsing_name.contains('!')
+                                || parsing_name.to_lowercase().contains("windowsapps");
 
-                                let clean_path = if !parsing_name.to_lowercase().starts_with("shell:appsfolder\\")
-                                    && parsing_name.contains('!')
-                                {
-                                    format!(r"shell:AppsFolder\{}", parsing_name)
-                                } else {
-                                    parsing_name
-                                };
+                            // Any item from shell:AppsFolder should be prefixed with shell:AppsFolder\
+                            let clean_path = if parsing_name.to_lowercase().starts_with("shell:appsfolder\\") {
+                                parsing_name
+                            } else {
+                                format!(r"shell:AppsFolder\{}", parsing_name)
+                            };
 
-                                apps.entry(name.trim().to_string())
-                                    .or_insert((clean_path, is_store));
-                            }
+                            apps.entry(name.trim().to_string())
+                                .or_insert((clean_path, is_store));
                         }
                     }
                 }
@@ -121,16 +117,16 @@ unsafe fn get_item_string(
     item: &IShellItem,
     sigdn: windows::Win32::UI::Shell::SIGDN,
 ) -> Option<String> {
-    if let Ok(raw_str) = item.GetDisplayName(sigdn) {
-        if !raw_str.is_null() {
-            let mut len = 0;
-            while *raw_str.0.add(len) != 0 {
-                len += 1;
-            }
-            let s = String::from_utf16_lossy(std::slice::from_raw_parts(raw_str.0, len));
-            CoTaskMemFree(Some(raw_str.0 as *mut _));
-            return Some(s);
+    if let Ok(raw_str) = item.GetDisplayName(sigdn)
+        && !raw_str.is_null()
+    {
+        let mut len = 0;
+        while *raw_str.0.add(len) != 0 {
+            len += 1;
         }
+        let s = String::from_utf16_lossy(std::slice::from_raw_parts(raw_str.0, len));
+        CoTaskMemFree(Some(raw_str.0 as *mut _));
+        return Some(s);
     }
     None
 }
@@ -145,31 +141,30 @@ fn scan_directory_for_links(dir: &Path, apps: &mut BTreeMap<String, (String, boo
             let path = entry.path();
             if path.is_dir() {
                 scan_directory_for_links(&path, apps);
-            } else if let Some(ext) = path.extension() {
-                if ext.eq_ignore_ascii_case("lnk") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let lower = stem.to_lowercase();
-                        // Filter out non-app shortcuts
-                        if lower.contains("uninstall")
-                            || lower.contains("gỡ cài đặt")
-                            || lower.contains("help")
-                            || lower.contains("trợ giúp")
-                            || lower.contains("readme")
-                            || lower.contains("documentation")
-                            || lower.contains("tài liệu")
-                            || lower.contains("website")
-                            || lower.starts_with("visit ")
-                            || lower.starts_with("remove ")
-                        {
-                            continue;
-                        }
+            } else if let Some(ext) = path.extension()
+                && ext.eq_ignore_ascii_case("lnk")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                let lower = stem.to_lowercase();
+                // Filter out non-app shortcuts
+                if lower.contains("uninstall")
+                    || lower.contains("gỡ cài đặt")
+                    || lower.contains("help")
+                    || lower.contains("trợ giúp")
+                    || lower.contains("readme")
+                    || lower.contains("documentation")
+                    || lower.contains("tài liệu")
+                    || lower.contains("website")
+                    || lower.starts_with("visit ")
+                    || lower.starts_with("remove ")
+                {
+                    continue;
+                }
 
-                        let clean_name = stem.trim().to_string();
-                        if !clean_name.is_empty() {
-                            let full_path = path.to_string_lossy().to_string();
-                            apps.entry(clean_name).or_insert((full_path, false));
-                        }
-                    }
+                let clean_name = stem.trim().to_string();
+                if !clean_name.is_empty() {
+                    let full_path = path.to_string_lossy().to_string();
+                    apps.entry(clean_name).or_insert((full_path, false));
                 }
             }
         }
