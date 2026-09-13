@@ -9,39 +9,118 @@ use eframe::egui;
 fn setup_system_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
 
-    // Load Segoe UI from Windows Fonts for full Vietnamese & Unicode support
-    if let Ok(font_data) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") {
-        fonts.font_data.insert(
-            "segoe_ui".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_data)),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .insert(0, "segoe_ui".to_owned());
+    let win_dir = std::env::var("SystemRoot")
+        .or_else(|_| std::env::var("WINDIR"))
+        .unwrap_or_else(|_| r"C:\Windows".to_string());
+    let font_dir = std::path::PathBuf::from(win_dir).join("Fonts");
+
+    let mut load_font = |filename: &str, font_name: &str| -> bool {
+        let path = font_dir.join(filename);
+        if let Ok(data) = std::fs::read(&path) {
+            fonts.font_data.insert(
+                font_name.to_owned(),
+                std::sync::Arc::new(egui::FontData::from_owned(data)),
+            );
+            true
+        } else {
+            false
+        }
+    };
+
+    // Load full Vietnamese & Unicode fonts from Windows system
+    load_font("SegUIVar.ttf", "segoe_ui_var");
+    load_font("segoeui.ttf", "segoe_ui");
+    load_font("segoeuib.ttf", "segoe_ui_bold");
+    load_font("arial.ttf", "arial");
+    load_font("arialbd.ttf", "arial_bold");
+    load_font("tahoma.ttf", "tahoma");
+    load_font("tahomabd.ttf", "tahoma_bold");
+    load_font("calibri.ttf", "calibri");
+    load_font("calibrib.ttf", "calibri_bold");
+    load_font("times.ttf", "times_new_roman");
+    load_font("seguisym.ttf", "segoe_ui_symbol");
+    load_font("seguiemj.ttf", "segoe_ui_emoji");
+
+    // Monospace
+    load_font("CascadiaCode.ttf", "cascadia_code");
+    load_font("CascadiaMono.ttf", "cascadia_mono");
+    load_font("consola.ttf", "consolas");
+    load_font("consolab.ttf", "consolas_bold");
+    load_font("cour.ttf", "courier_new");
+
+    // Configure Proportional family priority
+    // Arial & Tahoma guarantee 100% full Vietnamese coverage across all Windows versions
+    let prop_priority = [
+        "segoe_ui_var",
+        "segoe_ui",
+        "arial",
+        "tahoma",
+        "calibri",
+        "times_new_roman",
+        "segoe_ui_symbol",
+        "segoe_ui_emoji",
+    ];
+
+    for name in prop_priority.iter().rev() {
+        if fonts.font_data.contains_key(*name) {
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, (*name).to_string());
+        }
     }
 
-    if let Ok(font_bold) = std::fs::read(r"C:\Windows\Fonts\segoeuib.ttf") {
-        fonts.font_data.insert(
-            "segoe_ui_bold".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_bold)),
-        );
-    }
+    // Configure Monospace family priority
+    let mono_priority = [
+        "cascadia_code",
+        "cascadia_mono",
+        "consolas",
+        "courier_new",
+        "arial",
+        "segoe_ui",
+    ];
 
-    if let Ok(font_mono) = std::fs::read(r"C:\Windows\Fonts\consola.ttf") {
-        fonts.font_data.insert(
-            "consolas".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(font_mono)),
-        );
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .insert(0, "consolas".to_owned());
+    for name in mono_priority.iter().rev() {
+        if fonts.font_data.contains_key(*name) {
+            fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .insert(0, (*name).to_string());
+        }
     }
 
     ctx.set_fonts(fonts);
+}
+
+fn normalize_vietnamese(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        let ch = match c {
+            'à' | 'á' | 'ả' | 'ã' | 'ạ' | 'ă' | 'ằ' | 'ắ' | 'ẳ' | 'ẵ' | 'ặ' | 'â' | 'ầ' | 'ấ'
+            | 'ẩ' | 'ẫ' | 'ậ' => 'a',
+            'À' | 'Á' | 'Ả' | 'Ã' | 'Ạ' | 'Ă' | 'Ằ' | 'Ắ' | 'Ẳ' | 'Ẵ' | 'Ặ' | 'Â' | 'Ầ' | 'Ấ'
+            | 'Ẩ' | 'Ẫ' | 'Ậ' => 'a',
+            'è' | 'é' | 'ẻ' | 'ẽ' | 'ẹ' | 'ê' | 'ề' | 'ế' | 'ể' | 'ễ' | 'ệ' => 'e',
+            'È' | 'É' | 'Ẻ' | 'Ẽ' | 'Ẹ' | 'Ê' | 'Ề' | 'Ế' | 'Ể' | 'Ễ' | 'Ệ' => 'e',
+            'ì' | 'í' | 'ỉ' | 'ĩ' | 'ị' => 'i',
+            'Ì' | 'Í' | 'Ỉ' | 'Ĩ' | 'Ị' => 'i',
+            'ò' | 'ó' | 'ỏ' | 'õ' | 'ọ' | 'ô' | 'ồ' | 'ố' | 'ổ' | 'ỗ' | 'ộ' | 'ơ' | 'ờ' | 'ớ'
+            | 'ở' | 'ỡ' | 'ợ' => 'o',
+            'Ò' | 'Ó' | 'Ỏ' | 'Õ' | 'Ọ' | 'Ô' | 'Ồ' | 'Ố' | 'Ổ' | 'Ỗ' | 'Ộ' | 'Ơ' | 'Ờ' | 'Ớ'
+            | 'Ở' | 'Ỡ' | 'Ợ' => 'o',
+            'ù' | 'ú' | 'ủ' | 'ũ' | 'ụ' | 'ư' | 'ừ' | 'ứ' | 'ử' | 'ữ' | 'ự' => 'u',
+            'Ù' | 'Ú' | 'Ủ' | 'Ũ' | 'Ụ' | 'Ư' | 'Ừ' | 'Ứ' | 'Ử' | 'Ữ' | 'Ự' => 'u',
+            'ỳ' | 'ý' | 'ỷ' | 'ỹ' | 'ỵ' => 'y',
+            'Ỳ' | 'Ý' | 'Ỷ' | 'Ỹ' | 'Ỵ' => 'y',
+            'đ' => 'd',
+            'Đ' => 'd',
+            other => other.to_ascii_lowercase(),
+        };
+        result.push(ch);
+    }
+    result
 }
 
 pub fn run_settings_window() {
@@ -57,7 +136,7 @@ pub fn run_settings_window() {
         "Copilot Key Remapper - Settings",
         options,
         Box::new(|cc| {
-            // Load Windows Segoe UI font
+            // Load Windows Segoe UI & Vietnamese fonts
             setup_system_fonts(&cc.egui_ctx);
             // Light theme as requested
             cc.egui_ctx.set_visuals(egui::Visuals::light());
@@ -183,7 +262,10 @@ impl eframe::App for SettingsApp {
                                     .installed_apps
                                     .iter()
                                     .enumerate()
-                                    .find(|(_, a)| a.name.to_lowercase().starts_with(target))
+                                    .find(|(_, a)| {
+                                        a.name.to_lowercase().starts_with(target)
+                                            || normalize_vietnamese(&a.name).starts_with(target)
+                                    })
                                 {
                                     self.selected_app_idx = Some(idx);
                                     self.app_path = app.path.clone();
@@ -247,18 +329,24 @@ impl eframe::App for SettingsApp {
                             ui.horizontal(|ui| {
                                 let search_edit = ui.add(
                                     egui::TextEdit::singleline(&mut self.app_search_filter)
-                                        .hint_text("🔍 Filter application name (e.g. Claude, Terminal, Chrome)...")
+                                        .hint_text("🔍 Filter application name (e.g. Claude, Terminal, Chrome, Cốc Cốc)...")
                                         .desired_width(ui.available_width() - 75.0),
                                 );
 
+                                let filter = self.app_search_filter.trim().to_lowercase();
+                                let norm_filter = normalize_vietnamese(&filter);
+
                                 if search_edit.changed()
-                                    && !self.app_search_filter.trim().is_empty()
-                                    && let filter = self.app_search_filter.trim().to_lowercase()
+                                    && !filter.is_empty()
                                     && let Some((orig_idx, app)) = self
                                         .installed_apps
                                         .iter()
                                         .enumerate()
-                                        .find(|(_, a)| a.name.to_lowercase().contains(&filter))
+                                        .find(|(_, a)| {
+                                            let name_lower = a.name.to_lowercase();
+                                            name_lower.contains(&filter)
+                                                || normalize_vietnamese(&name_lower).contains(&norm_filter)
+                                        })
                                 {
                                     self.selected_app_idx = Some(orig_idx);
                                     self.app_path = app.path.clone();
@@ -272,11 +360,20 @@ impl eframe::App for SettingsApp {
                             });
 
                             let filter = self.app_search_filter.trim().to_lowercase();
+                            let norm_filter = normalize_vietnamese(&filter);
                             let filtered_apps: Vec<(usize, &InstalledApp)> = self
                                 .installed_apps
                                 .iter()
                                 .enumerate()
-                                .filter(|(_, a)| filter.is_empty() || a.name.to_lowercase().contains(&filter))
+                                .filter(|(_, a)| {
+                                    if filter.is_empty() {
+                                        true
+                                    } else {
+                                        let name_lower = a.name.to_lowercase();
+                                        name_lower.contains(&filter)
+                                            || normalize_vietnamese(&name_lower).contains(&norm_filter)
+                                    }
+                                })
                                 .collect();
 
                             let selected_text = self
@@ -389,7 +486,7 @@ impl eframe::App for SettingsApp {
                                 if ui.button("⚙ Task Manager (Ctrl+Shift+Esc)").clicked() {
                                     self.keys = "Ctrl, Shift, Esc".to_string();
                                 }
-                                if ui.button("🗔 Task View (Win+Tab)").clicked() {
+                                if ui.button("🗺 Task View (Win+Tab)").clicked() {
                                     self.keys = "Win, Tab".to_string();
                                 }
                             });
@@ -495,5 +592,24 @@ impl eframe::App for SettingsApp {
                 });
             });
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_vietnamese() {
+        assert_eq!(normalize_vietnamese("Cốc Cốc"), "coc coc");
+        assert_eq!(normalize_vietnamese("Bộ gõ tiếng Việt"), "bo go tieng viet");
+        assert_eq!(normalize_vietnamese("Trợ giúp & Hỗ trợ"), "tro giup & ho tro");
+        assert_eq!(normalize_vietnamese("Đại học"), "dai hoc");
+    }
+
+    #[test]
+    fn test_setup_system_fonts() {
+        let ctx = egui::Context::default();
+        setup_system_fonts(&ctx);
     }
 }
