@@ -70,6 +70,18 @@ New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 
 Copy-Item $exeSource -Destination (Join-Path $stagingDir "CopilotRemap.exe") -Force
 Copy-Item $settingsExeSource -Destination (Join-Path $stagingDir "Settings.exe") -Force
+
+# Self-contained Windows App Runtime (WinUI 3) staged next to the binaries by windows-reactor-setup.
+# Keep the relative layout: DLLs and .pri files at the root plus the resource sub-directories.
+$releaseDir = Join-Path $projectRoot "target\release"
+if (-not (Test-Path (Join-Path $releaseDir "Microsoft.WindowsAppRuntime.dll"))) {
+    Write-Error "Windows App Runtime files were not staged in $releaseDir. Run 'cargo build --release' first."
+}
+$cargoDirs = @("build", "deps", "examples", "incremental", ".fingerprint")
+Get-ChildItem -Path "$releaseDir\*" -File -Include *.dll, *.pri |
+    Copy-Item -Destination $stagingDir -Force
+Get-ChildItem $releaseDir -Directory | Where-Object { $cargoDirs -notcontains $_.Name } |
+    Copy-Item -Destination $stagingDir -Recurse -Force
 Copy-Item (Join-Path $projectRoot "packaging\AppxManifest.xml") -Destination (Join-Path $stagingDir "AppxManifest.xml") -Force
 Copy-Item (Join-Path $projectRoot "packaging\Assets") -Destination (Join-Path $stagingDir "Assets") -Recurse -Force
 

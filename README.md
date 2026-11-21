@@ -16,7 +16,7 @@ The app registers as an official **Copilot Key Provider** with Windows 11 via th
   - 🌐 **Open Websites / AI Assistants**: ChatGPT, Claude AI, Google Gemini, Perplexity, etc.
   - ⌨️ **Send Shortcut Keys (SendInput)**: PowerToys Run (`Alt + Space`), Snipping Tool (`Win + Shift + S`), Task Manager (`Ctrl + Shift + Esc`), etc.
   - 📜 **Execute Shell Commands**: Custom PowerShell / Command Prompt commands.
-- 🎨 **Intuitive Settings GUI**: Modern Win32 interface with 1-click presets, `.exe` file picker, **"Test Action"** button, and direct link to Windows Settings.
+- 🎨 **Native WinUI 3 Settings GUI**: Built with [windows-reactor](https://docs.rs/windows-reactor) (Fluent design, Mica, light/dark theme), with 1-click presets, installed-app search, `.exe` file picker, **"Test Action"** button, and direct link to Windows Settings.
 - 📦 **1-Click Installation**: The `install.ps1` script automatically trusts the certificate, installs the MSIX package, and activates the Copilot key in the Registry.
 
 ---
@@ -67,6 +67,8 @@ Run the build script:
 .\build.ps1
 ```
 The signed MSIX package will be output to: `target\CopilotRemap.msix`.
+
+The Settings UI uses WinUI 3 through `windows-reactor`. The build is **self-contained**: `build.rs` (via `windows-reactor-setup`) downloads the Windows App Runtime once (needs network, `curl.exe` and `tar.exe`), stages it next to the binaries in `target\<profile>\`, and `build.ps1` packs those files into the MSIX — users don't need to install the runtime separately.
 
 ---
 

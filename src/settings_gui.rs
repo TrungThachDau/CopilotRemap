@@ -4,94 +4,56 @@ use crate::config::{
 };
 use crate::executor;
 use crate::registry_helper;
-use eframe::egui;
+use std::path::PathBuf;
+use std::time::Duration;
+use windows::Win32::Foundation::ERROR_CANCELLED;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
+    CoInitializeEx, CoTaskMemFree, CoUninitialize,
+};
+use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
+use windows::Win32::UI::Shell::{
+    FOS_NODEREFERENCELINKS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+};
+use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+use windows::core::{HSTRING, w};
+use windows_reactor::*;
 
-fn setup_system_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
+const WINDOW_TITLE: &str = "Copilot Key Remapper - Settings";
+const PROVIDER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_APP_SUGGESTIONS: usize = 50;
 
-    let win_dir = std::env::var("SystemRoot")
-        .or_else(|_| std::env::var("WINDIR"))
-        .unwrap_or_else(|_| r"C:\Windows".to_string());
-    let font_dir = std::path::PathBuf::from(win_dir).join("Fonts");
+const ACTION_TYPES: [(ActionType, &str); 4] = [
+    (ActionType::LaunchApp, "Launch an application"),
+    (ActionType::OpenUrl, "Open a website"),
+    (ActionType::SendKeys, "Send a keyboard shortcut"),
+    (ActionType::CustomCommand, "Run a shell command"),
+];
 
-    let mut load_font = |filename: &str, font_name: &str| -> bool {
-        let path = font_dir.join(filename);
-        if let Ok(data) = std::fs::read(&path) {
-            fonts.font_data.insert(
-                font_name.to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(data)),
-            );
-            true
-        } else {
-            false
-        }
-    };
+const URL_PRESETS: [(&str, &str); 4] = [
+    ("ChatGPT", "https://chatgpt.com"),
+    ("Claude AI", "https://claude.ai"),
+    ("Google Gemini", "https://gemini.google.com"),
+    ("Perplexity", "https://www.perplexity.ai"),
+];
 
-    // Load full Vietnamese & Unicode fonts from Windows system
-    load_font("SegUIVar.ttf", "segoe_ui_var");
-    load_font("segoeui.ttf", "segoe_ui");
-    load_font("segoeuib.ttf", "segoe_ui_bold");
-    load_font("arial.ttf", "arial");
-    load_font("arialbd.ttf", "arial_bold");
-    load_font("tahoma.ttf", "tahoma");
-    load_font("tahomabd.ttf", "tahoma_bold");
-    load_font("calibri.ttf", "calibri");
-    load_font("calibrib.ttf", "calibri_bold");
-    load_font("times.ttf", "times_new_roman");
-    load_font("seguisym.ttf", "segoe_ui_symbol");
-    load_font("seguiemj.ttf", "segoe_ui_emoji");
+const KEY_PRESETS: [(&str, &str); 4] = [
+    ("PowerToys Run (Alt+Space)", "Alt, Space"),
+    ("Snipping Tool (Win+Shift+S)", "Win, Shift, S"),
+    ("Task Manager (Ctrl+Shift+Esc)", "Ctrl, Shift, Esc"),
+    ("Task View (Win+Tab)", "Win, Tab"),
+];
 
-    // Monospace
-    load_font("CascadiaCode.ttf", "cascadia_code");
-    load_font("CascadiaMono.ttf", "cascadia_mono");
-    load_font("consola.ttf", "consolas");
-    load_font("consolab.ttf", "consolas_bold");
-    load_font("cour.ttf", "courier_new");
-
-    // Configure Proportional family priority
-    // Arial & Tahoma guarantee 100% full Vietnamese coverage across all Windows versions
-    let prop_priority = [
-        "segoe_ui_var",
-        "segoe_ui",
-        "arial",
-        "tahoma",
-        "calibri",
-        "times_new_roman",
-        "segoe_ui_symbol",
-        "segoe_ui_emoji",
-    ];
-
-    for name in prop_priority.iter().rev() {
-        if fonts.font_data.contains_key(*name) {
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .insert(0, (*name).to_string());
+pub fn run_settings_window() {
+    if let Err(error) = App::run_component::<SettingsApp>(()) {
+        let text = HSTRING::from(format!(
+            "The settings window could not be started.\n\n{}",
+            error.message()
+        ));
+        unsafe {
+            MessageBoxW(None, &text, w!("Copilot Key Remapper"), MB_OK | MB_ICONERROR);
         }
     }
-
-    // Configure Monospace family priority
-    let mono_priority = [
-        "cascadia_code",
-        "cascadia_mono",
-        "consolas",
-        "courier_new",
-        "arial",
-        "segoe_ui",
-    ];
-
-    for name in mono_priority.iter().rev() {
-        if fonts.font_data.contains_key(*name) {
-            fonts
-                .families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .insert(0, (*name).to_string());
-        }
-    }
-
-    ctx.set_fonts(fonts);
 }
 
 fn normalize_vietnamese(s: &str) -> String {
@@ -123,76 +85,120 @@ fn normalize_vietnamese(s: &str) -> String {
     result
 }
 
-pub fn run_settings_window() {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([600.0, 560.0])
-            .with_min_inner_size([520.0, 480.0])
-            .with_title("Copilot Key Remapper - Settings"),
-        ..Default::default()
-    };
+/// Returns the apps whose name contains `query`, ignoring case and Vietnamese diacritics.
+fn filter_apps<'a>(
+    apps: &'a [InstalledApp],
+    query: &str,
+) -> impl Iterator<Item = &'a InstalledApp> {
+    let query = normalize_vietnamese(query.trim());
+    apps.iter()
+        .filter(move |app| normalize_vietnamese(&app.name).contains(&query))
+}
 
-    let _ = eframe::run_native(
-        "Copilot Key Remapper - Settings",
-        options,
-        Box::new(|cc| {
-            // Load Windows Segoe UI & Vietnamese fonts
-            setup_system_fonts(&cc.egui_ctx);
-            // Light theme as requested
-            cc.egui_ctx.set_visuals(egui::Visuals::light());
-            Ok(Box::new(SettingsApp::new()))
-        }),
-    );
+/// Shows the Shell file-open dialog and returns the chosen path, or `None` when cancelled.
+fn pick_executable() -> Result<Option<PathBuf>, String> {
+    // Shell dialogs need an STA thread; Reactor's background work runs on the thread pool.
+    std::thread::spawn(|| unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).ok()?;
+        let result = show_open_dialog();
+        CoUninitialize();
+        result
+    })
+    .join()
+    .map_err(|_| "The file dialog thread panicked".to_string())?
+    .map_err(|error| error.message())
+}
+
+unsafe fn show_open_dialog() -> windows::core::Result<Option<PathBuf>> {
+    unsafe {
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        dialog.SetTitle(w!("Choose an application"))?;
+        dialog.SetFileTypes(&[
+            COMDLG_FILTERSPEC {
+                pszName: w!("Executable / Shortcut"),
+                pszSpec: w!("*.exe;*.lnk;*.bat;*.cmd"),
+            },
+            COMDLG_FILTERSPEC {
+                pszName: w!("All Files"),
+                pszSpec: w!("*.*"),
+            },
+        ])?;
+        // Keep the chosen .lnk itself instead of resolving it to its target.
+        dialog.SetOptions(dialog.GetOptions()? | FOS_NODEREFERENCELINKS)?;
+
+        if let Err(error) = dialog.Show(None) {
+            return if error.code() == ERROR_CANCELLED.to_hresult() {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+
+        let raw = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+        let path = raw.to_string();
+        CoTaskMemFree(Some(raw.0 as *const _));
+        Ok(Some(PathBuf::from(path?)))
+    }
+}
+
+#[derive(Clone)]
+enum Message {
+    ActionTypeChanged(Option<usize>),
+    AppsLoaded(Vec<InstalledApp>),
+    AppSearchChanged(String),
+    AppSuggestionChosen(String),
+    AppSelected(Option<usize>),
+    AppPathChanged(String),
+    BrowseApp,
+    AppPicked(Result<Option<PathBuf>, String>),
+    AppArgsChanged(String),
+    AppDirChanged(String),
+    UrlChanged(String),
+    KeysChanged(String),
+    CmdCommandChanged(String),
+    CmdArgumentsChanged(String),
+    CmdRunHiddenChanged(bool),
+    ProviderStatus(bool),
+    OpenWindowsSettings,
+    TestAction,
+    Save,
+    DismissStatus,
+}
+
+struct Status {
+    severity: InfoBarSeverity,
+    message: String,
 }
 
 struct SettingsApp {
     action_type: ActionType,
 
-    // App controls
-    installed_apps: Vec<InstalledApp>,
-    selected_app_idx: Option<usize>,
-    app_search_filter: String,
+    installed_apps: Option<Vec<InstalledApp>>,
+    app_search: String,
+    is_picking_file: bool,
     app_path: String,
     app_args: String,
     app_dir: String,
 
-    // URL controls
     url: String,
 
-    // Keys controls
     keys: String,
 
-    // Command controls
     cmd_command: String,
     cmd_arguments: String,
     cmd_run_hidden: bool,
 
-    // Status notification
-    status_notification: Option<(String, bool)>, // (message, is_error)
+    provider_active: bool,
+    status: Option<Status>,
 }
 
 impl SettingsApp {
-    fn new() -> Self {
-        let config = AppConfig::load();
-        let installed_apps = app_scanner::get_installed_apps();
-
-        let mut selected_app_idx = None;
-        if !config.launch_app.path.is_empty() {
-            for (idx, app) in installed_apps.iter().enumerate() {
-                if app.path.eq_ignore_ascii_case(&config.launch_app.path)
-                    || app.name.eq_ignore_ascii_case(&config.launch_app.path)
-                {
-                    selected_app_idx = Some(idx);
-                    break;
-                }
-            }
-        }
-
+    fn from_config(config: AppConfig) -> Self {
         Self {
             action_type: config.action_type,
-            installed_apps,
-            selected_app_idx,
-            app_search_filter: String::new(),
+            installed_apps: None,
+            app_search: String::new(),
+            is_picking_file: false,
             app_path: config.launch_app.path,
             app_args: config.launch_app.arguments,
             app_dir: config.launch_app.working_dir,
@@ -201,7 +207,8 @@ impl SettingsApp {
             cmd_command: config.custom_command.command,
             cmd_arguments: config.custom_command.arguments,
             cmd_run_hidden: config.custom_command.run_hidden,
-            status_notification: None,
+            provider_active: registry_helper::get_copilot_key_status().is_copilot_remap_active,
+            status: None,
         }
     }
 
@@ -234,365 +241,415 @@ impl SettingsApp {
         }
     }
 
-    fn save_and_close(&mut self, ctx: &egui::Context) {
-        let config = self.to_config();
-        match config.save() {
-            Ok(()) => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-            Err(e) => {
-                self.status_notification =
-                    Some((format!("Failed to save settings: {}", e), true));
-            }
+    fn apps(&self) -> &[InstalledApp] {
+        self.installed_apps.as_deref().unwrap_or_default()
+    }
+
+    fn selected_app_index(&self) -> Option<usize> {
+        let path = self.app_path.trim();
+        if path.is_empty() {
+            return None;
         }
+        self.apps()
+            .iter()
+            .position(|app| app.path.eq_ignore_ascii_case(path) || app.name.eq_ignore_ascii_case(path))
+    }
+
+    fn set_status(&mut self, severity: InfoBarSeverity, message: impl Into<String>) {
+        self.status = Some(Status {
+            severity,
+            message: message.into(),
+        });
+    }
+
+    fn poll_provider_status(context: &ComponentContext<Self>, delay: Duration) {
+        context.spawn_background(move |cancellation| {
+            std::thread::sleep(delay);
+            if cancellation.is_cancelled() {
+                return Message::ProviderStatus(false);
+            }
+            Message::ProviderStatus(
+                registry_helper::get_copilot_key_status().is_copilot_remap_active,
+            )
+        });
+    }
+
+    fn header_view(&self) -> View {
+        StackPanel::new()
+            .spacing(4.0)
+            .children((
+                TextBlock::new()
+                    .text("Copilot Key Remapper")
+                    .font_size(28.0)
+                    .font_weight(FontWeight::SEMI_BOLD),
+                TextBlock::new()
+                    .text("Choose what happens when you press the Copilot key on your keyboard.")
+                    .text_wrapping(TextWrapping::Wrap),
+            ))
+    }
+
+    fn provider_view(&self) -> View {
+        let (severity, title, message) = if self.provider_active {
+            (
+                InfoBarSeverity::Success,
+                "Copilot key provider is active",
+                "Windows sends Copilot key presses to Copilot Remap.",
+            )
+        } else {
+            (
+                InfoBarSeverity::Warning,
+                "Copilot Remap is not the Copilot key provider",
+                "Open Windows Settings and choose Copilot Remap as the app for the Copilot key.",
+            )
+        };
+        InfoBar::new()
+            .is_open(true)
+            .is_closable(false)
+            .severity(severity)
+            .title(title)
+            .message(message)
+            .into()
+    }
+
+    fn action_type_view(&self, context: &ViewContext<Self>) -> View {
+        let selected = ACTION_TYPES
+            .iter()
+            .position(|(action, _)| *action == self.action_type);
+        card(
+            "When the Copilot key is pressed",
+            RadioButtons::new()
+                .items_source(ACTION_TYPES.map(|(_, label)| label))
+                .selected_index(selected)
+                .max_columns(2)
+                .on_selection_changed(context.callback(Message::ActionTypeChanged)),
+        )
+    }
+
+    fn details_view(&self, context: &ViewContext<Self>) -> View {
+        match self.action_type {
+            ActionType::LaunchApp => card("Application", self.launch_app_view(context)),
+            ActionType::OpenUrl => card("Website", self.open_url_view(context)),
+            ActionType::SendKeys => card("Keyboard shortcut", self.send_keys_view(context)),
+            ActionType::CustomCommand => card("Shell command", self.custom_command_view(context)),
+        }
+    }
+
+    fn launch_app_view(&self, context: &ViewContext<Self>) -> View {
+        let apps_loaded = self.installed_apps.is_some();
+        let suggestions: Vec<&str> = if self.app_search.trim().is_empty() {
+            Vec::new()
+        } else {
+            filter_apps(self.apps(), &self.app_search)
+                .take(MAX_APP_SUGGESTIONS)
+                .map(|app| app.name.as_str())
+                .collect()
+        };
+
+        StackPanel::new().spacing(12.0).children((
+            AutoSuggestBox::new()
+                .text(self.app_search.clone())
+                .placeholder_text("Type to filter, e.g. Claude, Terminal, Chrome, Cốc Cốc")
+                .items_source(suggestions)
+                .is_enabled(apps_loaded)
+                .on_text_changed(context.callback(Message::AppSearchChanged))
+                .on_suggestion_chosen(context.callback(Message::AppSuggestionChosen))
+                .slot(AutoSuggestBoxSlot::Header, "Search installed applications"),
+            ComboBox::new()
+                .items_source(self.apps().iter().map(|app| app.name.as_str()))
+                .selected_index(self.selected_app_index())
+                .placeholder_text(if apps_loaded {
+                    "Choose from installed applications"
+                } else {
+                    "Loading installed applications..."
+                })
+                .is_enabled(apps_loaded)
+                .horizontal_alignment(HorizontalAlignment::Stretch)
+                .on_selection_changed(context.callback(Message::AppSelected))
+                .slot(ComboBoxSlot::Header, "Installed application"),
+            Grid::new()
+                .column_spacing(8.0)
+                .columns([GridLength::STAR, GridLength::Auto])
+                .children((
+                    TextBox::new()
+                        .text(self.app_path.clone())
+                        .placeholder_text(r"C:\Path\To\App.exe")
+                        .on_text_changed(context.callback(Message::AppPathChanged))
+                        .slot(TextBoxSlot::Header, "Application path or executable"),
+                    Button::new()
+                        .is_enabled(!self.is_picking_file)
+                        .vertical_alignment(VerticalAlignment::Bottom)
+                        .grid_column(1)
+                        .on_click(context.message(Message::BrowseApp))
+                        .content("Browse..."),
+                )),
+            Grid::new()
+                .column_spacing(12.0)
+                .columns([GridLength::STAR, GridLength::STAR])
+                .children((
+                    TextBox::new()
+                        .text(self.app_args.clone())
+                        .on_text_changed(context.callback(Message::AppArgsChanged))
+                        .slot(TextBoxSlot::Header, "Arguments (optional)"),
+                    TextBox::new()
+                        .text(self.app_dir.clone())
+                        .grid_column(1)
+                        .on_text_changed(context.callback(Message::AppDirChanged))
+                        .slot(TextBoxSlot::Header, "Working directory (optional)"),
+                )),
+        ))
+    }
+
+    fn open_url_view(&self, context: &ViewContext<Self>) -> View {
+        StackPanel::new().spacing(12.0).children((
+            presets_view(context, URL_PRESETS, Message::UrlChanged),
+            TextBox::new()
+                .text(self.url.clone())
+                .placeholder_text("https://")
+                .on_text_changed(context.callback(Message::UrlChanged))
+                .slot(TextBoxSlot::Header, "Website URL"),
+        ))
+    }
+
+    fn send_keys_view(&self, context: &ViewContext<Self>) -> View {
+        StackPanel::new().spacing(12.0).children((
+            presets_view(context, KEY_PRESETS, Message::KeysChanged),
+            TextBox::new()
+                .text(self.keys.clone())
+                .placeholder_text("Alt, Space")
+                .on_text_changed(context.callback(Message::KeysChanged))
+                .slot(TextBoxSlot::Header, "Shortcut keys (comma-separated)"),
+        ))
+    }
+
+    fn custom_command_view(&self, context: &ViewContext<Self>) -> View {
+        StackPanel::new().spacing(12.0).children((
+            TextBox::new()
+                .text(self.cmd_command.clone())
+                .placeholder_text("wt.exe")
+                .on_text_changed(context.callback(Message::CmdCommandChanged))
+                .slot(TextBoxSlot::Header, "Command or executable"),
+            TextBox::new()
+                .text(self.cmd_arguments.clone())
+                .on_text_changed(context.callback(Message::CmdArgumentsChanged))
+                .slot(TextBoxSlot::Header, "Arguments (optional)"),
+            CheckBox::new()
+                .is_checked(self.cmd_run_hidden)
+                .on_is_checked_changed(context.callback(Message::CmdRunHiddenChanged))
+                .content("Run silently in the background (hide the console window)"),
+        ))
+    }
+
+    fn status_view(&self, context: &ViewContext<Self>) -> View {
+        let (severity, message) = self
+            .status
+            .as_ref()
+            .map_or((InfoBarSeverity::Informational, ""), |status| {
+                (status.severity, status.message.as_str())
+            });
+        InfoBar::new()
+            .is_open(self.status.is_some())
+            .is_closable(true)
+            .severity(severity)
+            .message(message)
+            .on_closed(context.message(Message::DismissStatus))
+            .into()
+    }
+
+    fn footer_view(&self, context: &ViewContext<Self>) -> View {
+        Border::new()
+            .background(ThemeBrush::CardBackground)
+            .border_brush(ThemeBrush::CardStroke)
+            .border_thickness(Thickness::new(0.0, 1.0, 0.0, 0.0))
+            .padding(Thickness::xy(24.0, 16.0))
+            .grid_row(1)
+            .content(
+                Grid::new()
+                    .column_spacing(8.0)
+                    .columns([
+                        GridLength::Auto,
+                        GridLength::STAR,
+                        GridLength::Auto,
+                        GridLength::Auto,
+                    ])
+                    .children((
+                        Button::new()
+                            .on_click(context.message(Message::OpenWindowsSettings))
+                            .content("Windows Settings..."),
+                        Button::new()
+                            .grid_column(2)
+                            .on_click(context.message(Message::TestAction))
+                            .content("Test action"),
+                        Button::new()
+                            .style(ButtonStyle::Accent)
+                            .grid_column(3)
+                            .on_click(context.message(Message::Save))
+                            .content("Save settings"),
+                    )),
+            )
     }
 }
 
-impl eframe::App for SettingsApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Handle keyboard quick-jump when not currently editing a text box
-        if self.action_type == ActionType::LaunchApp && !ctx.wants_keyboard_input() {
-            ctx.input(|i| {
-                for event in &i.events {
-                    if let egui::Event::Text(t) = event {
-                        for c in t.chars() {
-                            if c.is_alphanumeric() {
-                                let target = c.to_ascii_lowercase();
-                                if let Some((idx, app)) = self
-                                    .installed_apps
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, a)| {
-                                        a.name.to_lowercase().starts_with(target)
-                                            || normalize_vietnamese(&a.name).starts_with(target)
-                                    })
-                                {
-                                    self.selected_app_idx = Some(idx);
-                                    self.app_path = app.path.clone();
-                                }
-                                break;
-                            }
-                        }
+impl Component for SettingsApp {
+    type Input = ();
+    type Message = Message;
+
+    fn create(_input: &(), context: &ComponentContext<Self>) -> Self {
+        // Scanning initializes COM and walks the Start menu, so keep it off the UI thread.
+        context.spawn_background(|_| {
+            let apps = std::thread::spawn(app_scanner::get_installed_apps)
+                .join()
+                .unwrap_or_default();
+            Message::AppsLoaded(apps)
+        });
+        Self::poll_provider_status(context, PROVIDER_POLL_INTERVAL);
+        Self::from_config(AppConfig::load())
+    }
+
+    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+        match message {
+            Message::ActionTypeChanged(Some(index)) => {
+                if let Some((action, _)) = ACTION_TYPES.get(index) {
+                    self.action_type = *action;
+                }
+            }
+            Message::ActionTypeChanged(None) => {}
+            Message::AppsLoaded(apps) => self.installed_apps = Some(apps),
+            Message::AppSearchChanged(text) => self.app_search = text,
+            Message::AppSuggestionChosen(name) => {
+                if let Some(app) = self.apps().iter().find(|app| app.name == name) {
+                    self.app_path = app.path.clone();
+                }
+                self.app_search = name;
+            }
+            Message::AppSelected(Some(index)) => {
+                if let Some(app) = self.apps().get(index) {
+                    self.app_path = app.path.clone();
+                }
+            }
+            Message::AppSelected(None) => {}
+            Message::AppPathChanged(text) => self.app_path = text,
+            Message::BrowseApp if !self.is_picking_file => {
+                self.is_picking_file = true;
+                context.spawn_background(|_| Message::AppPicked(pick_executable()));
+            }
+            Message::BrowseApp => {}
+            Message::AppPicked(result) => {
+                self.is_picking_file = false;
+                match result {
+                    Ok(Some(path)) => self.app_path = path.display().to_string(),
+                    Ok(None) => {}
+                    Err(error) => self.set_status(
+                        InfoBarSeverity::Error,
+                        format!("Could not open the file picker: {error}"),
+                    ),
+                }
+            }
+            Message::AppArgsChanged(text) => self.app_args = text,
+            Message::AppDirChanged(text) => self.app_dir = text,
+            Message::UrlChanged(text) => self.url = text,
+            Message::KeysChanged(text) => self.keys = text,
+            Message::CmdCommandChanged(text) => self.cmd_command = text,
+            Message::CmdArgumentsChanged(text) => self.cmd_arguments = text,
+            Message::CmdRunHiddenChanged(value) => self.cmd_run_hidden = value,
+            Message::ProviderStatus(active) => {
+                self.provider_active = active;
+                Self::poll_provider_status(context, PROVIDER_POLL_INTERVAL);
+            }
+            Message::OpenWindowsSettings => registry_helper::open_windows_copilot_settings(),
+            Message::TestAction => {
+                executor::execute_action(&self.to_config());
+                self.set_status(InfoBarSeverity::Success, "Test action executed.");
+            }
+            Message::Save => match self.to_config().save() {
+                Ok(()) => {
+                    if !context.window().request_close() {
+                        self.set_status(InfoBarSeverity::Success, "Settings saved.");
                     }
                 }
-            });
+                Err(error) => self.set_status(
+                    InfoBarSeverity::Error,
+                    format!("Failed to save settings: {error}"),
+                ),
+            },
+            Message::DismissStatus => self.status = None,
         }
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-
-            // Header Title
-            ui.horizontal(|ui| {
-                ui.heading("⚡ Copilot Key Remapper");
-            });
-            ui.label("Configure what happens when the Copilot hardware key is pressed.");
-            ui.separator();
-
-            // 1. Action Mode Selector
-            ui.label(egui::RichText::new("Action Type:").strong());
-            ui.horizontal_wrapped(|ui| {
-                ui.selectable_value(
-                    &mut self.action_type,
-                    ActionType::LaunchApp,
-                    "🚀 Launch Application",
-                );
-                ui.selectable_value(
-                    &mut self.action_type,
-                    ActionType::OpenUrl,
-                    "🌐 Open Website",
-                );
-                ui.selectable_value(
-                    &mut self.action_type,
-                    ActionType::SendKeys,
-                    "⌨ Hotkey Shortcut",
-                );
-                ui.selectable_value(
-                    &mut self.action_type,
-                    ActionType::CustomCommand,
-                    "📜 Shell Command",
-                );
-            });
-
-            ui.add_space(4.0);
-
-            // 2. Configuration Details Box
-            egui::Frame::group(ui.style())
-                .inner_margin(12.0)
-                .show(ui, |ui| {
-                    match self.action_type {
-                        ActionType::LaunchApp => {
-                            ui.label(egui::RichText::new("Application Settings").strong());
-                            ui.add_space(4.0);
-
-                            // Installed apps search and filter
-                            ui.label("Search or select installed application:");
-                            ui.horizontal(|ui| {
-                                let search_edit = ui.add(
-                                    egui::TextEdit::singleline(&mut self.app_search_filter)
-                                        .hint_text("🔍 Filter application name (e.g. Claude, Terminal, Chrome, Cốc Cốc)...")
-                                        .desired_width(ui.available_width() - 75.0),
-                                );
-
-                                let filter = self.app_search_filter.trim().to_lowercase();
-                                let norm_filter = normalize_vietnamese(&filter);
-
-                                if search_edit.changed()
-                                    && !filter.is_empty()
-                                    && let Some((orig_idx, app)) = self
-                                        .installed_apps
-                                        .iter()
-                                        .enumerate()
-                                        .find(|(_, a)| {
-                                            let name_lower = a.name.to_lowercase();
-                                            name_lower.contains(&filter)
-                                                || normalize_vietnamese(&name_lower).contains(&norm_filter)
-                                        })
-                                {
-                                    self.selected_app_idx = Some(orig_idx);
-                                    self.app_path = app.path.clone();
-                                }
-
-                                if !self.app_search_filter.is_empty()
-                                    && ui.button("✖ Clear").clicked()
-                                {
-                                    self.app_search_filter.clear();
-                                }
-                            });
-
-                            let filter = self.app_search_filter.trim().to_lowercase();
-                            let norm_filter = normalize_vietnamese(&filter);
-                            let filtered_apps: Vec<(usize, &InstalledApp)> = self
-                                .installed_apps
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, a)| {
-                                    if filter.is_empty() {
-                                        true
-                                    } else {
-                                        let name_lower = a.name.to_lowercase();
-                                        name_lower.contains(&filter)
-                                            || normalize_vietnamese(&name_lower).contains(&norm_filter)
-                                    }
-                                })
-                                .collect();
-
-                            let selected_text = self
-                                .selected_app_idx
-                                .and_then(|i| self.installed_apps.get(i))
-                                .map(|a| a.name.as_str())
-                                .unwrap_or("-- Choose from installed applications --");
-
-                            egui::ComboBox::from_id_salt("installed_apps_combo")
-                                .width(ui.available_width() - 10.0)
-                                .selected_text(selected_text)
-                                .show_ui(ui, |ui| {
-                                    egui::ScrollArea::vertical()
-                                        .max_height(240.0)
-                                        .show(ui, |ui| {
-                                            if filtered_apps.is_empty() {
-                                                ui.label(
-                                                    egui::RichText::new("No applications match your filter")
-                                                        .italics()
-                                                        .color(egui::Color32::GRAY),
-                                                );
-                                            } else {
-                                                for (orig_idx, app) in &filtered_apps {
-                                                    let is_selected = self.selected_app_idx == Some(*orig_idx);
-                                                    if ui.selectable_label(is_selected, &app.name).clicked() {
-                                                        self.selected_app_idx = Some(*orig_idx);
-                                                        self.app_path = app.path.clone();
-                                                    }
-                                                }
-                                            }
-                                        });
-                                });
-
-                            ui.add_space(4.0);
-                            ui.label("Application path / executable:");
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.app_path)
-                                        .desired_width(ui.available_width() - 85.0),
-                                );
-                                if ui.button("Browse...").clicked()
-                                    && let Some(file) = rfd::FileDialog::new()
-                                        .add_filter(
-                                            "Executable / Shortcut",
-                                            &["exe", "lnk", "bat", "cmd"],
-                                        )
-                                        .add_filter("All Files", &["*"])
-                                        .pick_file()
-                                {
-                                    self.app_path = file.display().to_string();
-                                }
-                            });
-
-                            ui.add_space(4.0);
-                            ui.columns(2, |columns| {
-                                columns[0].label("Arguments (optional):");
-                                columns[0].add(
-                                    egui::TextEdit::singleline(&mut self.app_args)
-                                        .desired_width(columns[0].available_width()),
-                                );
-
-                                columns[1].label("Working directory (optional):");
-                                columns[1].add(
-                                    egui::TextEdit::singleline(&mut self.app_dir)
-                                        .desired_width(columns[1].available_width()),
-                                );
-                            });
-                        }
-
-                        ActionType::OpenUrl => {
-                            ui.label(egui::RichText::new("Website Settings").strong());
-                            ui.add_space(4.0);
-
-                            ui.label("Quick Presets:");
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("🤖 ChatGPT").clicked() {
-                                    self.url = "https://chatgpt.com".to_string();
-                                }
-                                if ui.button("🧠 Claude AI").clicked() {
-                                    self.url = "https://claude.ai".to_string();
-                                }
-                                if ui.button("✨ Google Gemini").clicked() {
-                                    self.url = "https://gemini.google.com".to_string();
-                                }
-                                if ui.button("🔍 Perplexity").clicked() {
-                                    self.url = "https://www.perplexity.ai".to_string();
-                                }
-                            });
-
-                            ui.add_space(4.0);
-                            ui.label("Target Website URL:");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.url)
-                                    .desired_width(ui.available_width() - 10.0),
-                            );
-                        }
-
-                        ActionType::SendKeys => {
-                            ui.label(egui::RichText::new("Hotkey Shortcut Settings").strong());
-                            ui.add_space(4.0);
-
-                            ui.label("Quick Presets:");
-                            ui.horizontal_wrapped(|ui| {
-                                if ui.button("⚡ PowerToys Run (Alt+Space)").clicked() {
-                                    self.keys = "Alt, Space".to_string();
-                                }
-                                if ui.button("✂ Snipping Tool (Win+Shift+S)").clicked() {
-                                    self.keys = "Win, Shift, S".to_string();
-                                }
-                                if ui.button("⚙ Task Manager (Ctrl+Shift+Esc)").clicked() {
-                                    self.keys = "Ctrl, Shift, Esc".to_string();
-                                }
-                                if ui.button("🗺 Task View (Win+Tab)").clicked() {
-                                    self.keys = "Win, Tab".to_string();
-                                }
-                            });
-
-                            ui.add_space(4.0);
-                            ui.label("Shortcut keys (comma-separated, e.g. Alt, Space):");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.keys)
-                                    .desired_width(ui.available_width() - 10.0),
-                            );
-                        }
-
-                        ActionType::CustomCommand => {
-                            ui.label(egui::RichText::new("Custom Shell Command Settings").strong());
-                            ui.add_space(4.0);
-
-                            ui.label("Command or Executable:");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.cmd_command)
-                                    .desired_width(ui.available_width() - 10.0),
-                            );
-
-                            ui.add_space(4.0);
-                            ui.label("Arguments (optional):");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.cmd_arguments)
-                                    .desired_width(ui.available_width() - 10.0),
-                            );
-
-                            ui.add_space(4.0);
-                            ui.checkbox(
-                                &mut self.cmd_run_hidden,
-                                "Run in background silently (hide console window)",
-                            );
-                        }
-                    }
-                });
-
-            // 3. Status Notification / Info Banner
-            if let Some((msg, is_error)) = &self.status_notification {
-                let color = if *is_error {
-                    egui::Color32::from_rgb(180, 40, 40)
-                } else {
-                    egui::Color32::from_rgb(40, 140, 40)
-                };
-                ui.colored_label(color, msg);
-            }
-
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                // Bottom Button Bar
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    if ui.button("⚙ Windows Settings...").clicked() {
-                        registry_helper::open_windows_copilot_settings();
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("💾 Save Settings").strong(),
-                                )
-                                .min_size(egui::vec2(120.0, 28.0)),
-                            )
-                            .clicked()
-                        {
-                            self.save_and_close(ctx);
-                        }
-
-                        if ui
-                            .add(
-                                egui::Button::new("▶ Test Action")
-                                    .min_size(egui::vec2(100.0, 28.0)),
-                            )
-                            .clicked()
-                        {
-                            let config = self.to_config();
-                            executor::execute_action(&config);
-                            self.status_notification =
-                                Some(("Action executed for test.".to_string(), false));
-                        }
-                    });
-                });
-
-                ui.separator();
-
-                // Provider Status check
-                let status = registry_helper::get_copilot_key_status();
-                ui.horizontal(|ui| {
-                    if status.is_copilot_remap_active {
-                        ui.label(
-                            egui::RichText::new("✓ Copilot Key Provider is active")
-                                .color(egui::Color32::from_rgb(30, 130, 30)),
-                        );
-                    } else {
-                        ui.label(
-                            egui::RichText::new(
-                                "⚠ CopilotRemap is not currently selected as Windows Copilot Provider",
-                            )
-                            .color(egui::Color32::from_rgb(180, 100, 20)),
-                        );
-                    }
-                });
-            });
-        });
     }
+
+    fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
+        context.window_title(WINDOW_TITLE);
+        context.window_visuals(
+            WindowVisuals::new()
+                .backdrop(WindowBackdrop::Mica)
+                .client_size(640.0, 720.0)
+                .constraints(WindowConstraints {
+                    min_width: Some(520.0),
+                    min_height: Some(560.0),
+                    ..WindowConstraints::default()
+                }),
+        );
+
+        Grid::new()
+            .rows([GridLength::STAR, GridLength::Auto])
+            .children((
+                ScrollViewer::new().content(
+                    StackPanel::new()
+                        .spacing(16.0)
+                        .margin(Thickness::uniform(24.0))
+                        .children((
+                            self.header_view(),
+                            self.provider_view(),
+                            self.action_type_view(context),
+                            self.details_view(context),
+                            self.status_view(context),
+                        )),
+                ),
+                self.footer_view(context),
+            ))
+    }
+}
+
+fn card(title: &str, body: impl Into<View>) -> View {
+    Border::new()
+        .background(ThemeBrush::CardBackground)
+        .border_brush(ThemeBrush::CardStroke)
+        .border_thickness(1.0)
+        .corner_radius(8.0)
+        .padding(16.0)
+        .content(StackPanel::new().spacing(12.0).children((
+            TextBlock::new()
+                .text(title)
+                .font_size(16.0)
+                .font_weight(FontWeight::SEMI_BOLD),
+            body.into(),
+        )))
+}
+
+/// Lays out four preset buttons in a 2x2 grid; clicking one sends `to_message(value)`.
+fn presets_view(
+    context: &ViewContext<SettingsApp>,
+    presets: [(&'static str, &'static str); 4],
+    to_message: fn(String) -> Message,
+) -> View {
+    let mut index = 0;
+    let buttons = presets.map(|(label, value)| {
+        let (row, column) = (index / 2, index % 2);
+        index += 1;
+        Button::new()
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .grid_row(row)
+            .grid_column(column)
+            .on_click(context.message(to_message(value.to_string())))
+            .content(label)
+    });
+    StackPanel::new().spacing(8.0).children((
+        TextBlock::new().text("Quick presets"),
+        Grid::new()
+            .row_spacing(8.0)
+            .column_spacing(8.0)
+            .columns([GridLength::STAR, GridLength::STAR])
+            .rows([GridLength::Auto, GridLength::Auto])
+            .children(buttons),
+    ))
 }
 
 #[cfg(test)]
@@ -607,9 +664,24 @@ mod tests {
         assert_eq!(normalize_vietnamese("Đại học"), "dai hoc");
     }
 
+    fn app(name: &str) -> InstalledApp {
+        InstalledApp {
+            name: name.to_string(),
+            path: format!("{name}.exe"),
+            is_store_app: false,
+        }
+    }
+
     #[test]
-    fn test_setup_system_fonts() {
-        let ctx = egui::Context::default();
-        setup_system_fonts(&ctx);
+    fn filter_apps_should_match_without_diacritics_or_case() {
+        let apps = [app("Cốc Cốc"), app("Chrome"), app("Windows Terminal")];
+        let names: Vec<&str> = filter_apps(&apps, "COC").map(|a| a.name.as_str()).collect();
+        assert_eq!(names, ["Cốc Cốc"]);
+    }
+
+    #[test]
+    fn filter_apps_should_match_diacritic_query() {
+        let apps = [app("Coc Coc"), app("Chrome")];
+        assert_eq!(filter_apps(&apps, "cốc").count(), 1);
     }
 }
